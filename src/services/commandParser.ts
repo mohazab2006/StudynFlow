@@ -3,7 +3,7 @@
  */
 
 export type CommandIntent =
-  | { type: 'add_task'; title: string; courseCode?: string; dueAt?: string; isRecurring?: boolean; recurrenceHint?: string }
+  | { type: 'add_task'; title: string; courseCode?: string; dueAt?: string; isRecurring?: boolean; recurrenceHint?: string; weightPercent?: number; taskType?: string }
   | { type: 'query_focus'; }
   | { type: 'query_needed_final'; courseCode?: string; targetPercent?: number }
   | { type: 'query_drop_lowest'; courseCode: string; confirmRequired: true }
@@ -28,6 +28,8 @@ void DUE_PATTERNS_RESERVED;
 
 const COURSE_CODE = /(?:in\s+)?([A-Z]{2,4}\d{4})/i;
 const RECURRING = /(?:recurring|weekly|daily|every\s+(?:mon|tue|wed|thu|fri|sat|sun))/i;
+const WEIGHT_PERCENT = /(?:weight|worth|)\s*(\d+(?:\.\d+)?)\s*%?/i;
+const TASK_TYPE_WORDS = ['assignment', 'quiz', 'lab', 'tutorial', 'reading', 'project', 'exam', 'midterm', 'final'];
 
 function parseTime(s: string): string | null {
   const m = s.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
@@ -145,6 +147,23 @@ export function parseCommand(input: string, _pageContext?: { courseCode?: string
       const { dueAt, cleanTitle } = parseDueFromRemainder(remainder);
       let title = cleanTitle.replace(COURSE_CODE, '').replace(RECURRING, '').replace(/\s+/g, ' ').trim();
       if (!title) title = remainder.split(/\s+due\s+/i)[0]?.trim() || remainder;
+
+      let weightPercent: number | undefined;
+      const weightMatch = remainder.match(WEIGHT_PERCENT);
+      if (weightMatch) {
+        const v = parseFloat(weightMatch[1]);
+        if (Number.isFinite(v) && v > 0 && v <= 100) weightPercent = v;
+      }
+
+      let taskType: string | undefined;
+      const lower = remainder.toLowerCase();
+      for (const word of TASK_TYPE_WORDS) {
+        if (new RegExp(`\\b${word}s?\\b`).test(lower)) {
+          taskType = word.charAt(0).toUpperCase() + word.slice(1);
+          break;
+        }
+      }
+
       return {
         type: 'add_task',
         title: title || remainder,
@@ -152,6 +171,8 @@ export function parseCommand(input: string, _pageContext?: { courseCode?: string
         dueAt,
         isRecurring: isRecurring || undefined,
         recurrenceHint: isRecurring ? 'Weekly (adjust in Life)' : undefined,
+        weightPercent,
+        taskType,
       };
     }
   }

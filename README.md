@@ -1,80 +1,113 @@
 # StudynFlow
 
-A modern desktop todo app that actually makes task management enjoyable. Built with Tauri 2, React, and TypeScript—because who says productivity tools have to be boring?
+A modern desktop todo app for students and life. Built with Tauri 2, React, and TypeScript.
 
-## ✨ What I've Built
+---
 
-### 🎯 Dual Workspace System
-Separate your academic and personal life with dedicated **School** and **Life** workspaces. School tasks integrate with course management and grade tracking, while life tasks support custom categories and auto-cleanup. No more mixing your exam prep with grocery lists.
+## ✨ Features
 
-### 🔄 Smart Recurring Tasks
-Built a template-based recurrence system that's actually flexible. Create recurring tasks with daily, weekly, or monthly patterns (think RRULE but simpler). Instances generate on-demand with a 90-day horizon, and you can edit individual occurrences or entire series. Perfect for those "every Monday morning" habits.
-
-### 🌤️ Weather-Integrated Dashboard
-Why stare at a boring dashboard when you can have animated weather? Integrated Open-Meteo API with dynamic CSS animations—particle systems for rain/snow, gradient overlays, and even starfields for clear nights. The weather widget adapts based on WMO weather codes and time of day. It's functional *and* pretty.
+### 🎯 Dual Workspace (School & Life)
+- **School**: Courses, grade tracking, task types (assignments, quizzes, labs, exams, etc.), drop-lowest rules, course outline (prof, TAs, policies).
+- **Life**: Custom categories, recurring tasks, auto-cleanup. Keep exam prep separate from groceries.
 
 ### 📊 Grade Tracking & Course Management
-For the students: full course management with color-coded courses, grade tracking with weighted calculations, and task types (assignments, exams, labs, etc.). Know exactly where you stand in each class.
+- Color-coded courses, weighted grade calculations, task types.
+- “What do I need on the final?” and what-if grading in Command Center.
+- Course rules (e.g. drop lowest N of M quizzes). Full calendar and study-plan support.
 
-### ✅ Core Task Management
-The essentials done right: status workflow (todo → doing → done), subtasks, due dates, priorities, and effort estimates. Recurring instances appear at midnight on their occurrence date, keeping your schedule clean.
+### ✅ Task Management
+- Status: todo → doing → done. Subtasks, due dates, priorities, **effort estimates** (minutes).
+- Recurring tasks: daily/weekly/monthly templates, 90-day horizon, edit single occurrences or series.
 
-### 📱 Multiple Views
-- **Home**: Dashboard with recurring templates and weather
-- **Today**: What needs your attention right now
-- **Upcoming**: See what's coming down the pipeline
-- **School/Life**: Workspace-specific views with filtering
+### 🏠 Home Dashboard (single row)
+Five widgets in one horizontal row:
+- **Snapshot** – Counts for today, upcoming 7d, school, life.
+- **Weather** – Open-Meteo with live conditions and rain/snow/sun/cloud animations.
+- **Focus** – Top tasks by due date and weight (School/Life filter).
+- **Calendar** – Mini month grid: today highlighted, task count per day, link to full calendar.
+- **Recurring Tasks** – Upcoming recurring templates.
+
+Below: **Today + Overdue** and **Next 7 days** task lists.
+
+### ⌘ Command Center (`Ctrl+K` / `⌘K`)
+- **Quick add** with course, weight, type, due date (e.g. “Add assignment in COMP2401 weight 8%”).
+- Queries: “What do I need on the final?”, “Drop lowest quiz in COMP2401”.
+- **Voice input** (optional): `Ctrl+Shift+V`, language and auto-submit in voice settings.
+- **AI settings**: Enable/disable AI, base URL, model. One API key for all users (set at build time).
+
+### 📥 Import Outline
+- Upload **PDF, image, or .txt** or paste syllabus text.
+- **Rule-based** extraction of tasks (weights, types, dates). Optional **“Use AI to extract tasks”** for messy syllabi.
+- When a **course is selected**, prof, TAs, office hours, textbook, attendance, submission policy, etc. are extracted and saved to that course’s **Course outline** section on the School page.
+- Uploaded files stored as course assets.
+
+### 📋 Course Outline (School page)
+When a course is selected, the **Course outline** block shows:
+- Professor name & email, TAs, office hours.
+- Textbook/materials, technical requirements.
+- Attendance, submission/late policy, exam pass rule, learning objectives.
+- Filled automatically from Import Outline or from “Extract outline from pasted syllabus” in the same section.
+
+### 🤖 AI (one key for everyone)
+- **Build-time key**: Set `VITE_OPENAI_API_KEY` in `.env`; all users share it. No per-user API key; don’t commit `.env`.
+- **Natural-language quick add** (top bar & Command Center): e.g. “add comp2401 assignment weight 8%”, “add quizzes 1-10 each 5% in comp2404”.
+- **AI task extraction** in Import Outline when “Use AI to extract tasks” is checked.
+- **Suggest effort (AI)** in the School task modal: estimates effort in minutes (15–480) from title and type.
+- Toggle, base URL, and model in **Command Center → AI settings**.
+
+### 📱 Views
+- **Home** – Dashboard (widgets + today + next 7 days).
+- **Today** – Due today and overdue.
+- **Upcoming** – Next 7 days.
+- **School** – Course dashboard, grade breakdown, course outline, rules, tasks.
+- **Life** – Categories and life tasks.
+- **Calendar** – Full monthly view of tasks by due date (linked from Home mini calendar).
+
+---
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: React 18, TypeScript, Tailwind CSS
-- **Backend**: Tauri 2 (Rust) - native performance, tiny bundle size
-- **Database**: SQLite via `@tauri-apps/plugin-sql` - local-first, no cloud required
-- **State**: TanStack Query for server state, React Hook Form + Zod for forms
-- **Routing**: React Router v6
+| Layer      | Stack |
+|-----------|--------|
+| Frontend  | React 18, TypeScript, Tailwind CSS |
+| Backend   | Tauri 2 (Rust) |
+| Database  | SQLite via `@tauri-apps/plugin-sql` (local-first) |
+| State     | TanStack Query, React Hook Form + Zod |
+| Routing   | React Router v6 |
+
+---
 
 ## 🚀 Getting Started
 
-Requires Node.js 18+ and Rust toolchain.
+**Requirements:** Node.js 18+, Rust toolchain.
 
 ```bash
-# Install dependencies
 npm install
+```
 
-# Run in development mode
+**Optional – enable AI for all users (no per-user key):**
+1. Copy `.env.example` to `.env`.
+2. Set `VITE_OPENAI_API_KEY=your-openai-key` in `.env`.
+3. Do not commit `.env` (it’s in `.gitignore`).
+
+```bash
+# Development
 npm run tauri:dev
 
-# Build for production
+# Production build
 npm run tauri:build
 ```
 
-## 🔮 What's Coming Next
+**App icon:** After changing `app-icon.png`:
 
-I'm actively working on some exciting features that'll make this even better:
+```bash
+npx tauri icon app-icon.png
+```
 
-### 🤖 AI-Powered Intelligence
-The big one. I'm planning to add AI features that'll actually make your life easier:
-- **Smart Prioritization**: AI that understands your deadlines, workload, and patterns to suggest what to tackle first
-- **Auto-Scheduling**: Let AI figure out when you should work on tasks based on your calendar and energy levels
-- **Intelligent Categorization**: Automatically organize tasks into the right categories
-- **Task Recommendations**: AI-generated suggestions based on your habits and goals
+Keep `public/app-icon.png` in sync for the in-app logo and favicon.
 
-### 🖥️ Desktop Widgets
-Quick-access widgets so you can see and complete tasks without opening the full app. Perfect for that second monitor or when you just need a quick check-in.
-
-### 📱 Mobile Companion (Maybe?)
-If I decide to expand beyond desktop, I'll build a mobile app with widgets showing today's tasks and upcoming deadlines. Because sometimes you need to check your todos while you're away from your desk.
-
-### 🎨 UI/UX Improvements
-- Better animations and transitions
-- More customization options
-- Dark/light theme toggle (currently dark-only)
-- Keyboard shortcuts for power users
-
-The AI features are the main focus right now—I want to make task management genuinely intelligent, not just a fancy list.
+---
 
 ## 📝 Credits
 
-Used [rapidtables](https://www.rapidtables.com) as a reference for some parts of the implementation.
-
----
+[rapidtables](https://www.rapidtables.com) was used as a reference for parts of the implementation.

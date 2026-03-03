@@ -16,7 +16,15 @@ import {
   VOICE_LANGUAGES,
   type VoiceSettings,
 } from '../../services/voiceSettings';
+import {
+  getAISettings,
+  setAIEnabled,
+  setAIBaseUrl,
+  setAIModel,
+  type AISettings,
+} from '../../services/aiSettings';
 import { useSpeechRecognition } from '../../hooks/useSpeechRecognition';
+import { useUpsertTaskGrade } from '../../hooks/useGrades';
 
 interface CommandCenterProps {
   isOpen: boolean;
@@ -28,8 +36,11 @@ export default function CommandCenter({ isOpen, onClose, pageContext }: CommandC
   const [input, setInput] = useState('');
   const [result, setResult] = useState<{ intent: CommandIntent; message: string; confirmAction?: () => void } | null>(null);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
+  const [aiSettingsOpen, setAISettingsOpen] = useState(false);
   const [voiceSettings, setVoiceSettingsState] = useState<VoiceSettings>(getVoiceSettings);
+  const [aiSettings, setAISettingsState] = useState<AISettings>(getAISettings);
   const navigate = useNavigate();
+  const upsertGrade = useUpsertTaskGrade();
 
   const updateVoiceSetting = useCallback(<K extends keyof VoiceSettings>(key: K, value: VoiceSettings[K]) => {
     setVoiceSettingsState((s) => ({ ...s, [key]: value }));
@@ -105,6 +116,8 @@ export default function CommandCenter({ isOpen, onClose, pageContext }: CommandC
           `Create task: "${intent.title}"`,
           intent.dueAt ? `Due: ${new Date(intent.dueAt).toLocaleString()}` : null,
           intent.courseCode ? `Course: ${intent.courseCode}` : 'No course',
+          intent.taskType ? `Type: ${intent.taskType}` : null,
+          intent.weightPercent != null ? `Weight: ${intent.weightPercent}%` : null,
           intent.isRecurring ? 'Recurring (create in Life to set schedule)' : null,
         ]
           .filter(Boolean)
@@ -114,13 +127,23 @@ export default function CommandCenter({ isOpen, onClose, pageContext }: CommandC
           message: preview,
           confirmAction: async () => {
             try {
-              await createTask.mutateAsync({
+              const task = await createTask.mutateAsync({
                 title: intent.title,
                 due_at: intent.dueAt ?? undefined,
                 course_id: courseId ?? undefined,
                 workspace: courseId ? 'school' : 'life',
                 status: 'todo',
+                type: intent.taskType as any,
               });
+              if (task && (intent.weightPercent != null || intent.taskType) && courseId) {
+                await upsertGrade.mutateAsync({
+                  task_id: task.id,
+                  grade_percent: null,
+                  weight_percent: intent.weightPercent ?? null,
+                  is_graded: false,
+                  counts: true,
+                });
+              }
               setResult({ intent, message: 'Task created.' });
               setInput('');
               setTimeout(() => onClose(), 800);
@@ -137,7 +160,7 @@ export default function CommandCenter({ isOpen, onClose, pageContext }: CommandC
       }
       setResult({ intent, message: 'Try "Add assignment in COMP2401 due Friday 11:59" or "What do I need on the final?"' });
     },
-    [courses, allSchoolTasks, createTask, navigate, onClose]
+    [courses, allSchoolTasks, createTask, upsertGrade, navigate, onClose]
   );
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -175,7 +198,10 @@ export default function CommandCenter({ isOpen, onClose, pageContext }: CommandC
   const displayInput = isListening ? (liveTranscript || input) : input;
 
   useEffect(() => {
-    if (isOpen) setVoiceSettingsState(getVoiceSettings());
+    if (isOpen) {
+      setVoiceSettingsState(getVoiceSettings());
+      setAISettingsState(getAISettings());
+    }
   }, [isOpen]);
 
   useEffect(() => {
@@ -183,6 +209,7 @@ export default function CommandCenter({ isOpen, onClose, pageContext }: CommandC
       setInput('');
       setResult(null);
       setVoiceSettingsOpen(false);
+      setAISettingsOpen(false);
       if (isListening) stopListening();
     }
   }, [isOpen, isListening, stopListening]);
@@ -314,27 +341,48 @@ export default function CommandCenter({ isOpen, onClose, pageContext }: CommandC
 
         <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground space-y-2">
           <p>
-            Examples: Add assignment in COMP2401 due Friday 11:59 · What do I need on the final? · Drop lowest quiz in COMP2401
+            Examples: Add assignment in COMP2401 weight 8% · Add quizzes 1-10 each 5% in COMP2404 · What do I need on the final?
           </p>
-          <div>
-            <button
-              type="button"
-              onClick={() => setVoiceSettingsOpen((o) => !o)}
-              className="text-muted-foreground hover:text-foreground underline"
-            >
-              {voiceSettingsOpen ? 'Hide' : 'Show'} voice settings
-            </button>
-            {voiceSettingsOpen && (
-              <div className="mt-2 p-3 rounded-lg bg-muted/40 space-y-3">
-                <VoiceSettingsPanel
-                  settings={voiceSettings}
-                  onEnabledChange={(v) => updateVoiceSetting('enabled', v)}
-                  onLanguageChange={(v) => updateVoiceSetting('language', v)}
-                  onAutoSubmitChange={(v) => updateVoiceSetting('autoSubmitAfterSpeech', v)}
-                  isSupported={voiceSupported}
-                />
-              </div>
-            )}
+          <div className="flex flex-wrap gap-3">
+            <div>
+              <button
+                type="button"
+                onClick={() => setVoiceSettingsOpen((o) => !o)}
+                className="text-muted-foreground hover:text-foreground underline"
+              >
+                {voiceSettingsOpen ? 'Hide' : 'Show'} voice settings
+              </button>
+              {voiceSettingsOpen && (
+                <div className="mt-2 p-3 rounded-lg bg-muted/40 space-y-3">
+                  <VoiceSettingsPanel
+                    settings={voiceSettings}
+                    onEnabledChange={(v) => updateVoiceSetting('enabled', v)}
+                    onLanguageChange={(v) => updateVoiceSetting('language', v)}
+                    onAutoSubmitChange={(v) => updateVoiceSetting('autoSubmitAfterSpeech', v)}
+                    isSupported={voiceSupported}
+                  />
+                </div>
+              )}
+            </div>
+            <div>
+              <button
+                type="button"
+                onClick={() => setAISettingsOpen((o) => !o)}
+                className="text-muted-foreground hover:text-foreground underline"
+              >
+                {aiSettingsOpen ? 'Hide' : 'Show'} AI settings
+              </button>
+              {aiSettingsOpen && (
+                <div className="mt-2 p-3 rounded-lg bg-muted/40 space-y-3">
+                  <AISettingsPanel
+                    settings={aiSettings}
+                    onEnabledChange={(v) => { setAIEnabled(v); setAISettingsState((prev) => ({ ...prev, enabled: v })); }}
+                    onBaseUrlChange={(v) => { setAIBaseUrl(v); setAISettingsState((prev) => ({ ...prev, baseUrl: v })); }}
+                    onModelChange={(v) => { setAIModel(v); setAISettingsState((prev) => ({ ...prev, model: v })); }}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -423,6 +471,67 @@ function VoiceSettingsPanel({
       </p>
       <p className="text-xs text-muted-foreground">
         Recognition may use online services when available. No audio is stored.
+      </p>
+    </div>
+  );
+}
+
+function AISettingsPanel({
+  settings,
+  onEnabledChange,
+  onBaseUrlChange,
+  onModelChange,
+}: {
+  settings: AISettings;
+  onEnabledChange: (v: boolean) => void;
+  onBaseUrlChange: (v: string) => void;
+  onModelChange: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="text-xs text-muted-foreground mb-1">
+        Control AI features: natural-language quick add in the top bar and task extraction when importing outlines. The app uses one API key for everyone (set when the app was built).
+      </p>
+      <div className="flex items-center justify-between">
+        <label className="text-foreground">Enable AI (quick add & import)</label>
+        <input
+          type="checkbox"
+          checked={settings.enabled}
+          onChange={(e) => onEnabledChange(e.target.checked)}
+          className="rounded border-border"
+        />
+      </div>
+      {settings.usesBuiltInKey ? (
+        <p className="text-xs text-muted-foreground">
+          Using app API key (set at build time). All users share this key.
+        </p>
+      ) : (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          No API key. Set VITE_OPENAI_API_KEY in .env and rebuild to enable AI for everyone.
+        </p>
+      )}
+      <div>
+        <label className="text-foreground block mb-1">Base URL (optional)</label>
+        <input
+          type="text"
+          value={settings.baseUrl}
+          onChange={(e) => onBaseUrlChange(e.target.value)}
+          placeholder="https://api.openai.com/v1"
+          className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+        />
+      </div>
+      <div>
+        <label className="text-foreground block mb-1">Model</label>
+        <input
+          type="text"
+          value={settings.model}
+          onChange={(e) => onModelChange(e.target.value)}
+          placeholder="gpt-4o-mini"
+          className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Natural-language quick add and AI task extraction from uploaded outlines.
       </p>
     </div>
   );

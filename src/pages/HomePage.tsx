@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { format } from 'date-fns';
+import {
+  format,
+  startOfMonth,
+  endOfMonth,
+  eachDayOfInterval,
+  startOfWeek,
+  endOfWeek,
+  isSameMonth,
+  isToday,
+  parseISO,
+} from 'date-fns';
 import { useTasks, useRecurringTemplates } from '../hooks/useTasks';
+import type { TaskWithCourse } from '../lib/types';
 import TaskList from '../components/tasks/TaskList';
 import type { RecurrenceRule } from '../lib/types';
 import { formatRecurrenceRule } from '../lib/recurrenceFormat';
@@ -768,6 +779,26 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
+const WEEKDAY_SHORT = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function getCalendarDays(month: Date): Date[] {
+  const monthStart = startOfMonth(month);
+  const monthEnd = endOfMonth(month);
+  const rangeStart = startOfWeek(monthStart, { weekStartsOn: 0 });
+  const rangeEnd = endOfWeek(monthEnd, { weekStartsOn: 0 });
+  return eachDayOfInterval({ start: rangeStart, end: rangeEnd });
+}
+
+function tasksByDate(tasks: TaskWithCourse[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const task of tasks) {
+    if (!task.due_at) continue;
+    const dateKey = format(parseISO(task.due_at), 'yyyy-MM-dd');
+    map.set(dateKey, (map.get(dateKey) ?? 0) + 1);
+  }
+  return map;
+}
+
 export default function HomePage() {
   const [now, setNow] = useState(() => new Date());
   const [weather, setWeather] = useState<WeatherInfo | null>(null);
@@ -823,6 +854,16 @@ export default function HomePage() {
   });
   const { data: recurringTemplates = [], isLoading: recurringLoading } = useRecurringTemplates();
 
+  const calendarMonth = useMemo(() => startOfMonth(now), [now]);
+  const calendarMonthEnd = endOfMonth(now);
+  const { data: monthTasks = [] } = useTasks({
+    dueAfter: calendarMonth.toISOString(),
+    dueBefore: new Date(calendarMonthEnd.getTime() + 1).toISOString(),
+    includeCompleted: true,
+  });
+  const miniCalendarDays = useMemo(() => getCalendarDays(calendarMonth), [calendarMonth]);
+  const monthTasksByDay = useMemo(() => tasksByDate(monthTasks), [monthTasks]);
+
   const isLoading = todayLoading || overdueLoading || upcomingLoading || schoolAllLoading || lifeAllLoading;
   const schoolCount = schoolAll.length;
   const lifeCount = lifeAll.length;
@@ -864,7 +905,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         <Card title="Snapshot">
           {isLoading ? (
             <div className="text-sm text-muted-foreground">Loading...</div>
@@ -1045,6 +1086,46 @@ export default function HomePage() {
               )}
             </div>
           )}
+        </Card>
+
+        <Card title="Calendar">
+          <div className="mb-2 text-xs font-medium text-muted-foreground text-center">
+            {format(now, 'MMMM yyyy')}
+          </div>
+          <div className="grid grid-cols-7 gap-0.5 mb-3">
+            {WEEKDAY_SHORT.map((d) => (
+              <div key={d} className="text-center text-[10px] font-medium text-muted-foreground py-0.5">
+                {d}
+              </div>
+            ))}
+            {miniCalendarDays.map((day) => {
+              const dateKey = format(day, 'yyyy-MM-dd');
+              const count = monthTasksByDay.get(dateKey) ?? 0;
+              const inMonth = isSameMonth(day, calendarMonth);
+              const today = isToday(day);
+              return (
+                <div
+                  key={dateKey}
+                  className={`flex flex-col items-center justify-center min-h-[28px] rounded text-xs ${
+                    !inMonth ? 'opacity-35' : today ? 'bg-primary text-primary-foreground font-semibold' : 'text-foreground'
+                  }`}
+                >
+                  {format(day, 'd')}
+                  {inMonth && count > 0 && (
+                    <span className="text-[8px] leading-none mt-0.5" title={`${count} task${count !== 1 ? 's' : ''}`}>
+                      {count > 9 ? '9+' : count}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <Link
+            to="/calendar"
+            className="text-xs text-muted-foreground hover:text-foreground underline"
+          >
+            Open full calendar
+          </Link>
         </Card>
 
         <Card title="Recurring Tasks">

@@ -3,8 +3,12 @@ import { useCourses } from '../../hooks/useCourses';
 import { useCreateTask } from '../../hooks/useTasks';
 import { useUpsertTaskGrade } from '../../hooks/useGrades';
 import { useTaskTypes } from '../../hooks/useTaskTypes';
+import { useUpsertCourseProfile } from '../../hooks/useCourseProfile';
 import { extractTextFromFiles } from '../../services/extractText';
 import { parseOutlineText } from '../../services/outlineParser';
+import { extractProfileFromText } from '../../services/courseProfileExtract';
+import { extractTasksFromOutline } from '../../services/ai';
+import { hasAIConfigured } from '../../services/aiSettings';
 import { saveCourseAssetFile } from '../../services/courseAssetFs';
 import * as courseAssetsRepo from '../../db/courseAssets.repo';
 import type { ParsedOutlineRow } from '../../lib/types';
@@ -30,9 +34,11 @@ export default function ImportOutlineWizard({ isOpen, onClose, onSuccess }: Impo
   const [extractProgress, setExtractProgress] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [extractParseError, setExtractParseError] = useState<string | null>(null);
+  const [useAIExtract, setUseAIExtract] = useState(false);
   const extractAbortRef = useRef<AbortController | null>(null);
   const [extractElapsedSec, setExtractElapsedSec] = useState(0);
   const extractStartRef = useRef<number>(0);
+  const aiConfigured = hasAIConfigured();
 
   // Update elapsed time every second while extracting so user sees real progress
   useEffect(() => {
@@ -51,6 +57,7 @@ export default function ImportOutlineWizard({ isOpen, onClose, onSuccess }: Impo
   const createTask = useCreateTask();
   const upsertGrade = useUpsertTaskGrade();
   const { data: taskTypes = [] } = useTaskTypes();
+  const upsertCourseProfile = useUpsertCourseProfile(null);
 
   const typeNames = taskTypes.map((t) => t.name);
 
@@ -80,7 +87,25 @@ export default function ImportOutlineWizard({ isOpen, onClose, onSuccess }: Impo
       }
       setCombinedText(text);
       if (text) {
-        const parsed = parseOutlineText(text);
+        let parsed = parseOutlineText(text);
+        if (useAIExtract && aiConfigured) {
+          try {
+            setExtractProgress('Using AI to extract tasks…');
+            const aiRows = await extractTasksFromOutline(text, { signal: controller.signal });
+            if (aiRows.length > 0) parsed = aiRows;
+          } catch (e) {
+            if (e instanceof DOMException && e.name === 'AbortError') throw e;
+            console.warn('AI extraction failed, using rule-based parse:', e);
+          }
+        }
+        if (courseId && text.trim()) {
+          try {
+            const extracted = extractProfileFromText(text);
+            await upsertCourseProfile.mutateAsync({ course_id: courseId, ...extracted });
+          } catch (e) {
+            console.warn('Profile extraction failed:', e);
+          }
+        }
         setRows(parsed);
         setStep('review');
       } else {
@@ -101,7 +126,7 @@ export default function ImportOutlineWizard({ isOpen, onClose, onSuccess }: Impo
       setExtractProgress(null);
       extractAbortRef.current = null;
     }
-  }, [files, pastedText]);
+  }, [files, pastedText, useAIExtract, aiConfigured]);
 
   const cancelExtractAndClose = useCallback(() => {
     extractAbortRef.current?.abort();
@@ -214,6 +239,7 @@ export default function ImportOutlineWizard({ isOpen, onClose, onSuccess }: Impo
     setExtractErrors([]);
     setExtractParseError(null);
     setExtractProgress(null);
+    setUseAIExtract(false);
     setRows([]);
   };
 
@@ -289,6 +315,20 @@ export default function ImportOutlineWizard({ isOpen, onClose, onSuccess }: Impo
                   className="w-full h-32 px-3 py-2 bg-background border border-border rounded-lg text-sm resize-y"
                 />
               </div>
+              {aiConfigured && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="use-ai-extract"
+                    checked={useAIExtract}
+                    onChange={(e) => setUseAIExtract(e.target.checked)}
+                    className="rounded border-border"
+                  />
+                  <label htmlFor="use-ai-extract" className="text-sm text-foreground">
+                    Use AI to extract tasks (better for messy syllabi)
+                  </label>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={runExtractAndParse}

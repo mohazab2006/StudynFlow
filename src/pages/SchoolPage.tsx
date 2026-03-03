@@ -524,33 +524,45 @@ export default function SchoolPage() {
             </div>
           )}
 
-          {/* Course Overview (profile from extraction or paste) */}
+          {/* Course outline (prof, TAs, requirements – from Import Outline or paste) */}
           <div className="mt-3 rounded-lg border border-border bg-muted/20 p-4">
-            <div className="text-sm font-semibold mb-2">Course Overview</div>
+            <div className="text-sm font-semibold mb-2">Course outline</div>
             {courseProfile && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm mb-3">
                 {courseProfile.professor_name && (
                   <div><span className="text-muted-foreground">Professor:</span> {courseProfile.professor_name}</div>
                 )}
                 {courseProfile.professor_email && (
-                  <div><span className="text-muted-foreground">Email:</span> {courseProfile.professor_email}</div>
+                  <div><span className="text-muted-foreground">Email:</span> <a href={`mailto:${courseProfile.professor_email}`} className="text-primary underline">{courseProfile.professor_email}</a></div>
+                )}
+                {courseProfile.ta_names_emails && (
+                  <div className="md:col-span-2"><span className="text-muted-foreground">TAs:</span> {courseProfile.ta_names_emails}</div>
                 )}
                 {courseProfile.office_hours && (
                   <div><span className="text-muted-foreground">Office hours:</span> {courseProfile.office_hours}</div>
                 )}
                 {courseProfile.textbook_requirements && (
-                  <div><span className="text-muted-foreground">Textbook:</span> {courseProfile.textbook_requirements}</div>
+                  <div className="md:col-span-2"><span className="text-muted-foreground">Textbook / materials:</span> {courseProfile.textbook_requirements}</div>
                 )}
                 {courseProfile.technical_requirements && (
-                  <div><span className="text-muted-foreground">Technical:</span> {courseProfile.technical_requirements}</div>
+                  <div className="md:col-span-2"><span className="text-muted-foreground">Technical:</span> {courseProfile.technical_requirements}</div>
+                )}
+                {courseProfile.attendance_rules && (
+                  <div className="md:col-span-2"><span className="text-muted-foreground">Attendance:</span> {courseProfile.attendance_rules}</div>
+                )}
+                {courseProfile.submission_policies && (
+                  <div className="md:col-span-2"><span className="text-muted-foreground">Submission / late policy:</span> {courseProfile.submission_policies}</div>
                 )}
                 {courseProfile.exam_pass_requirement && (
                   <div><span className="text-muted-foreground">Exam pass:</span> {courseProfile.exam_pass_requirement}</div>
                 )}
+                {courseProfile.learning_objectives && (
+                  <div className="md:col-span-2"><span className="text-muted-foreground">Learning objectives:</span> {courseProfile.learning_objectives}</div>
+                )}
               </div>
             )}
             <details className="text-sm">
-              <summary className="cursor-pointer text-muted-foreground">Extract profile from pasted syllabus text</summary>
+              <summary className="cursor-pointer text-muted-foreground">Extract outline from pasted syllabus (prof, TAs, policies)</summary>
               <textarea
                 value={profilePaste}
                 onChange={(e) => setProfilePaste(e.target.value)}

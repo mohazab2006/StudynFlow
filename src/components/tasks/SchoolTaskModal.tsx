@@ -9,6 +9,8 @@ import { useTaskTypes } from '../../hooks/useTaskTypes';
 import { useCreateTaskType } from '../../hooks/useTaskTypes';
 import { useDeleteTaskGrade, useUpsertTaskGrade } from '../../hooks/useGrades';
 import AssessmentScopeSection from '../copilot/AssessmentScopeSection';
+import { hasAIConfigured } from '../../services/aiSettings';
+import { suggestTaskEffort } from '../../services/ai';
 
 interface SchoolTaskModalProps {
   task?: TaskWithCourse;
@@ -45,6 +47,7 @@ export default function SchoolTaskModal({ task, isOpen, onClose }: SchoolTaskMod
     counts: true,
     is_graded: false,
     grade_percent: '',
+    effort_estimate_minutes: '',
   };
 
   const { register, handleSubmit, reset, setValue, getValues, watch } = useForm({
@@ -66,6 +69,10 @@ export default function SchoolTaskModal({ task, isOpen, onClose }: SchoolTaskMod
             task.grade?.grade_percent === null || task.grade?.grade_percent === undefined
               ? ''
               : String(task.grade.grade_percent),
+          effort_estimate_minutes:
+            task.effort_estimate_minutes === null || task.effort_estimate_minutes === undefined
+              ? ''
+              : String(task.effort_estimate_minutes),
         }
       : emptyDefaults,
   });
@@ -97,6 +104,10 @@ export default function SchoolTaskModal({ task, isOpen, onClose }: SchoolTaskMod
           task.grade?.grade_percent === null || task.grade?.grade_percent === undefined
             ? ''
             : String(task.grade.grade_percent),
+        effort_estimate_minutes:
+          task.effort_estimate_minutes === null || task.effort_estimate_minutes === undefined
+            ? ''
+            : String(task.effort_estimate_minutes),
       });
     } else {
       reset(emptyDefaults);
@@ -121,12 +132,18 @@ export default function SchoolTaskModal({ task, isOpen, onClose }: SchoolTaskMod
             ? null
             : Number(data.grade_percent);
 
+      const effortMinutes =
+        data.effort_estimate_minutes === '' || data.effort_estimate_minutes == null
+          ? null
+          : Number(data.effort_estimate_minutes);
+
       if (isEditing) {
         await updateTask.mutateAsync({
           id: task.id,
           ...normalized,
           course_id,
           due_at: data.due_at || null,
+          effort_estimate_minutes: Number.isFinite(effortMinutes) ? effortMinutes : null,
         });
 
         if (course_id) {
@@ -148,6 +165,7 @@ export default function SchoolTaskModal({ task, isOpen, onClose }: SchoolTaskMod
           due_at: data.due_at || null,
           status: 'todo',
           workspace: 'school',
+          effort_estimate_minutes: Number.isFinite(effortMinutes) ? effortMinutes : null,
         });
 
         if (course_id) {
@@ -223,7 +241,23 @@ export default function SchoolTaskModal({ task, isOpen, onClose }: SchoolTaskMod
     }
   };
 
+  const [suggestingEffort, setSuggestingEffort] = useState(false);
+  const handleSuggestEffort = async () => {
+    const title = getValues('title')?.trim();
+    if (!title) return;
+    setSuggestingEffort(true);
+    try {
+      const { effortMinutes } = await suggestTaskEffort(title, watch('type') || undefined);
+      setValue('effort_estimate_minutes', String(effortMinutes), { shouldDirty: true });
+    } catch (e) {
+      console.warn('Suggest effort failed:', e);
+    } finally {
+      setSuggestingEffort(false);
+    }
+  };
+
   if (!isOpen) return null;
+  const aiConfigured = hasAIConfigured();
 
   const selectedCourseId = watch('course_id');
   const showGrading = !!selectedCourseId;
@@ -383,6 +417,30 @@ export default function SchoolTaskModal({ task, isOpen, onClose }: SchoolTaskMod
                   className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
+            </div>
+
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <label className="block text-sm font-medium mb-1">Effort (minutes)</label>
+                <input
+                  {...register('effort_estimate_minutes')}
+                  type="number"
+                  min={0}
+                  step={15}
+                  placeholder="e.g. 60"
+                  className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              {aiConfigured && (
+                <button
+                  type="button"
+                  onClick={handleSuggestEffort}
+                  disabled={suggestingEffort || !getValues('title')?.trim()}
+                  className="px-3 py-2 text-sm border border-border rounded-lg bg-muted hover:bg-muted/80 disabled:opacity-50 whitespace-nowrap"
+                >
+                  {suggestingEffort ? '…' : 'Suggest effort (AI)'}
+                </button>
+              )}
             </div>
 
             <div>

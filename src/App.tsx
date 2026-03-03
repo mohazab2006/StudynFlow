@@ -8,6 +8,7 @@ import TodayPage from './pages/TodayPage';
 import UpcomingPage from './pages/UpcomingPage';
 import SchoolPage from './pages/SchoolPage';
 import LifePage from './pages/LifePage';
+import CalendarPage from './pages/CalendarPage';
 
 function App() {
   useEffect(() => {
@@ -30,6 +31,7 @@ function App() {
           <Route path="upcoming" element={<UpcomingPage />} />
           <Route path="school" element={<SchoolPage />} />
           <Route path="life" element={<LifePage />} />
+          <Route path="calendar" element={<CalendarPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
