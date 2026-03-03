@@ -40,7 +40,9 @@ export function useUpdateTask() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['tasks'], exact: false });
       queryClient.invalidateQueries({ queryKey: ['tasks', data.id], exact: true });
+      queryClient.invalidateQueries({ queryKey: ['recurringTemplates'], exact: false });
       queryClient.refetchQueries({ queryKey: ['tasks'], exact: false, type: 'active' });
+      queryClient.refetchQueries({ queryKey: ['recurringTemplates'], exact: false, type: 'active' });
     },
   });
 }

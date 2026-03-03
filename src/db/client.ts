@@ -5,7 +5,7 @@ let initPromise: Promise<void> | null = null;
 
 export async function getDatabase(): Promise<Database> {
   if (!db) {
-    db = await Database.load('sqlite:mytodo.db');
+    db = await Database.load('sqlite:studynflow.db');
     // Make SQLite more resilient in dev where multiple quick writes happen.
     // This will wait for locks instead of immediately failing with SQLITE_BUSY (database is locked).
     await db.execute('PRAGMA busy_timeout = 5000');
@@ -75,6 +75,9 @@ async function runMigrations(database: Database): Promise<void> {
     migration6_add_task_workspace,
     migration7_add_task_grades,
     migration8_add_recurring_tasks,
+    migration9_unique_recurring_instances,
+    migration10_course_assets,
+    migration11_course_rules_and_profiles,
   ];
 
   for (let i = currentVersion; i < migrations.length; i++) {
@@ -282,5 +285,71 @@ async function migration8_add_recurring_tasks(db: Database): Promise<void> {
   await db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_recurring_series_id ON tasks(recurringSeriesId)');
   await db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_occurrence_date ON tasks(occurrenceDate)');
   await db.execute('CREATE INDEX IF NOT EXISTS idx_tasks_is_recurring_template ON tasks(isRecurringTemplate)');
+}
+
+async function migration9_unique_recurring_instances(db: Database): Promise<void> {
+  // Prevent creating duplicate recurring instances for the same template on the same day.
+  // We use a partial UNIQUE index so soft-deleted rows don't block future inserts.
+  await db.execute(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_tasks_recurring_instance_unique
+    ON tasks(parentTemplateId, occurrenceDate)
+    WHERE deleted_at IS NULL
+      AND parentTemplateId IS NOT NULL
+      AND occurrenceDate IS NOT NULL
+  `);
+}
+
+async function migration10_course_assets(db: Database): Promise<void> {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS course_assets (
+      id TEXT PRIMARY KEY,
+      course_id TEXT,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      content_type TEXT,
+      file_size INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at TEXT,
+      FOREIGN KEY (course_id) REFERENCES courses(id)
+    )
+  `);
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_course_assets_course_id ON course_assets(course_id)');
+}
+
+async function migration11_course_rules_and_profiles(db: Database): Promise<void> {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS course_rules (
+      id TEXT PRIMARY KEY,
+      course_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      target TEXT NOT NULL,
+      keep INTEGER NOT NULL,
+      total INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (course_id) REFERENCES courses(id)
+    )
+  `);
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_course_rules_course_id ON course_rules(course_id)');
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS course_profiles (
+      course_id TEXT PRIMARY KEY,
+      professor_name TEXT,
+      professor_email TEXT,
+      ta_names_emails TEXT,
+      office_hours TEXT,
+      learning_objectives TEXT,
+      textbook_requirements TEXT,
+      technical_requirements TEXT,
+      attendance_rules TEXT,
+      exam_pass_requirement TEXT,
+      submission_policies TEXT,
+      raw_extract TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (course_id) REFERENCES courses(id)
+    )
+  `);
 }
 

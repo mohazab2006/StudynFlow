@@ -1,7 +1,7 @@
 {
-  "productName": "mytodo",
+  "productName": "StudynFlow",
   "version": "0.1.0",
-  "identifier": "com.mytodo.app",
+  "identifier": "com.studynflow.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "MyTodo",
+        "title": "StudynFlow",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -31,7 +31,12 @@
             "sql:allow-load",
             "sql:allow-execute",
             "sql:allow-select",
-            "sql:allow-close"
+            "sql:allow-close",
+            "fs:default",
+            {
+              "identifier": "fs:scope",
+              "allow": [{ "path": "$APPDATA/studynflow/*" }]
+            }
           ]
         }
       ]
@@ -50,7 +55,7 @@
   },
   "plugins": {
     "sql": {
-      "preload": ["sqlite:mytodo.db"]
+      "preload": ["sqlite:studynflow.db"]
     }
   }
 }

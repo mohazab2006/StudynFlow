@@ -158,10 +158,12 @@ export interface CreateTaskInput {
   type?: TaskType;
   course_id?: string;
   life_category_id?: string;
+  workspace?: 'school' | 'life';
   status?: TaskStatus;
   priority_manual?: Priority;
   effort_estimate_minutes?: number;
   tags?: string;
+  source?: TaskSource;
   // Recurring task fields
   isRecurringTemplate?: boolean;
   recurrenceRuleJson?: string | null;
@@ -203,5 +205,78 @@ export interface UpdateSubtaskInput {
   text?: string;
   done?: boolean;
   order_index?: number;
+}
+
+// Course import (Milestone 5)
+export interface CourseAsset {
+  id: string;
+  course_id: string | null;
+  file_name: string;
+  file_path: string;
+  content_type: string | null;
+  file_size: number | null;
+  created_at: string;
+  deleted_at: string | null;
+}
+
+/** One proposed task from outline parsing; used in Review & Edit before creating real tasks. */
+export interface ParsedOutlineRow {
+  id: string;
+  title: string;
+  type: string; // TaskType name, e.g. 'Assignment', 'Quiz'
+  weight_percent: number | null;
+  due_at: string | null; // ISO or null if vague
+  notes: string; // vague timing, TBA, "see Brightspace", etc.
+  suggestion_note: string; // e.g. "Best 10 of 11"
+  include: boolean;
+}
+
+// --- Milestone 6: Course rules (drop lowest, etc.) ---
+export const CourseRuleType = {
+  DROP_LOWEST: 'DROP_LOWEST',
+} as const;
+export type CourseRuleType = (typeof CourseRuleType)[keyof typeof CourseRuleType];
+
+export interface CourseRule {
+  id: string;
+  course_id: string;
+  type: CourseRuleType;
+  target: string; // TaskType name, e.g. 'Quiz', 'Lab'
+  keep: number;
+  total: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Milestone 6: Course profile (extracted from assets) ---
+export interface CourseProfile {
+  course_id: string;
+  professor_name: string | null;
+  professor_email: string | null;
+  ta_names_emails: string | null;
+  office_hours: string | null;
+  learning_objectives: string | null;
+  textbook_requirements: string | null;
+  technical_requirements: string | null;
+  attendance_rules: string | null;
+  exam_pass_requirement: string | null;
+  submission_policies: string | null;
+  raw_extract: string | null;
+  updated_at: string;
+}
+
+// --- Milestone 6: Priority / focus ---
+export type FocusTag =
+  | 'High Impact'
+  | 'High Effort'
+  | 'Quick Win'
+  | 'At Risk'
+  | 'Low Flexibility';
+
+export interface TaskWithFocus extends TaskWithCourse {
+  focusScore?: number;
+  focusTags?: FocusTag[];
+  focusReason?: string;
 }
 

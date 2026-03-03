@@ -3,6 +3,9 @@ import { format } from 'date-fns';
 import { useTasks, useRecurringTemplates } from '../hooks/useTasks';
 import TaskList from '../components/tasks/TaskList';
 import type { RecurrenceRule } from '../lib/types';
+import { formatRecurrenceRule } from '../lib/recurrenceFormat';
+import { rankTasksByFocus } from '../services/focusScoring';
+import { getConflictWarnings } from '../services/conflictDetection';
 
 type WeatherInfo = {
   locationLabel: string;
@@ -756,39 +759,11 @@ async function fetchWeatherInfo(): Promise<WeatherInfo> {
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-border bg-muted/20 p-5">
-      <div className="text-sm font-semibold text-foreground mb-3">{title}</div>
+    <div className="rounded-xl border border-border bg-background p-5 shadow-sm">
+      <div className="mb-3 text-sm font-semibold text-foreground">{title}</div>
       {children}
     </div>
   );
-}
-
-function formatRecurrenceRule(rule: RecurrenceRule): string {
-  const interval = rule.interval > 1 ? `every ${rule.interval} ` : '';
-  
-  switch (rule.frequency) {
-    case 'DAILY':
-      return `${interval}Daily`;
-    case 'WEEKLY':
-      if (rule.byWeekday && rule.byWeekday.length > 0) {
-        const dayNames: Record<string, string> = {
-          MO: 'Mon',
-          TU: 'Tue',
-          WE: 'Wed',
-          TH: 'Thu',
-          FR: 'Fri',
-          SA: 'Sat',
-          SU: 'Sun',
-        };
-        const days = rule.byWeekday.map(d => dayNames[d] || d).join(', ');
-        return `${interval}Weekly on ${days}`;
-      }
-      return `${interval}Weekly`;
-    case 'MONTHLY':
-      return `${interval}Monthly`;
-    default:
-      return 'Recurring';
-  }
 }
 
 export default function HomePage() {
@@ -836,42 +811,39 @@ export default function HomePage() {
     dueRange: '7days',
     includeCompleted: false,
   });
+  const { data: schoolAll = [], isLoading: schoolAllLoading } = useTasks({
+    workspace: 'school',
+    includeCompleted: false,
+  });
+  const { data: lifeAll = [], isLoading: lifeAllLoading } = useTasks({
+    workspace: 'life',
+    includeCompleted: false,
+  });
   const { data: recurringTemplates = [], isLoading: recurringLoading } = useRecurringTemplates();
 
-  const isLoading = todayLoading || overdueLoading || upcomingLoading;
-  const allRelevantUnique = useMemo(() => {
-    const map = new Map<string, (typeof today)[number]>();
-    [...overdue, ...today, ...upcoming].forEach((t) => map.set(t.id, t));
-    return Array.from(map.values());
-  }, [overdue, today, upcoming]);
-  const schoolCount = useMemo(
-    () => allRelevantUnique.filter((t) => t.workspace === 'school' || (t.course_id && !t.workspace)).length,
-    [allRelevantUnique]
-  );
-  const lifeCount = useMemo(
-    () => allRelevantUnique.filter((t) => t.workspace === 'life' || (t.life_category_id && !t.workspace) || (!t.workspace && !t.course_id && !t.life_category_id)).length,
-    [allRelevantUnique]
-  );
+  const isLoading = todayLoading || overdueLoading || upcomingLoading || schoolAllLoading || lifeAllLoading;
+  const schoolCount = schoolAll.length;
+  const lifeCount = lifeAll.length;
 
   const topUpcoming = useMemo(() => upcoming.slice(0, 8), [upcoming]);
   const topToday = useMemo(() => [...overdue, ...today].slice(0, 8), [overdue, today]);
 
-  const focusTask = useMemo(() => {
-    const byDue = (a: any, b: any) => {
-      const ad = a?.due_at ? new Date(a.due_at).getTime() : Number.POSITIVE_INFINITY;
-      const bd = b?.due_at ? new Date(b.due_at).getTime() : Number.POSITIVE_INFINITY;
-      if (ad !== bd) return ad - bd;
-      return String(a?.title ?? '').localeCompare(String(b?.title ?? ''));
-    };
-
-    const upcomingSoon = [...today, ...upcoming].sort(byDue)[0];
-    if (upcomingSoon) return { task: upcomingSoon, label: 'Next up' as const };
-
-    const overdueSoon = [...overdue].sort(byDue)[0];
-    if (overdueSoon) return { task: overdueSoon, label: 'Overdue' as const };
-
-    return null;
-  }, [today, upcoming, overdue]);
+  const focusPool = useMemo(
+    () => [...overdue, ...today, ...upcoming],
+    [overdue, today, upcoming]
+  );
+  const [focusFilter, setFocusFilter] = useState<'all' | 'school' | 'life'>('all');
+  const focusFiltered = useMemo(() => {
+    if (focusFilter === 'school') return focusPool.filter((t) => t.workspace === 'school');
+    if (focusFilter === 'life') return focusPool.filter((t) => t.workspace === 'life');
+    return focusPool;
+  }, [focusPool, focusFilter]);
+  const focusRanked = useMemo(
+    () => rankTasksByFocus(focusFiltered, { now }),
+    [focusFiltered, now]
+  );
+  const topFocus = useMemo(() => focusRanked.slice(0, 5), [focusRanked]);
+  const conflictWarnings = useMemo(() => getConflictWarnings(focusPool), [focusPool]);
 
   return (
     <div className="max-w-7xl">
@@ -895,20 +867,20 @@ export default function HomePage() {
             <div className="text-sm text-muted-foreground">Loading...</div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-lg border border-border bg-background/40 p-3">
-                <div className="text-xs text-muted-foreground mb-1">Today</div>
+              <div className="rounded-lg border border-border bg-muted p-3">
+                <div className="mb-1 text-xs text-muted-foreground">Today</div>
                 <div className="text-2xl font-semibold tabular-nums">{today.length + overdue.length}</div>
               </div>
-              <div className="rounded-lg border border-border bg-background/40 p-3">
-                <div className="text-xs text-muted-foreground mb-1">Upcoming (7d)</div>
+              <div className="rounded-lg border border-border bg-muted p-3">
+                <div className="mb-1 text-xs text-muted-foreground">Upcoming (7d)</div>
                 <div className="text-2xl font-semibold tabular-nums">{upcoming.length}</div>
               </div>
-              <div className="rounded-lg border border-border bg-background/40 p-3">
-                <div className="text-xs text-muted-foreground mb-1">School</div>
+              <div className="rounded-lg border border-border bg-muted p-3">
+                <div className="mb-1 text-xs text-muted-foreground">School</div>
                 <div className="text-2xl font-semibold tabular-nums">{schoolCount}</div>
               </div>
-              <div className="rounded-lg border border-border bg-background/40 p-3">
-                <div className="text-xs text-muted-foreground mb-1">Life</div>
+              <div className="rounded-lg border border-border bg-muted p-3">
+                <div className="mb-1 text-xs text-muted-foreground">Life</div>
                 <div className="text-2xl font-semibold tabular-nums">{lifeCount}</div>
               </div>
             </div>
@@ -939,31 +911,9 @@ export default function HomePage() {
                 const theme = weatherTheme(weather.weatherCode, currentHour);
                 const isNight = currentHour >= 18 || currentHour < 6;
                 
-                // Enhanced gradient backgrounds based on weather
-                const gradientClass = 
-                  theme.effect === 'sun'
-                    ? 'bg-gradient-to-br from-amber-500/25 via-orange-400/20 to-yellow-300/15'
-                    : theme.effect === 'sunset'
-                    ? 'bg-gradient-to-br from-orange-500/30 via-pink-400/25 to-purple-300/20'
-                    : theme.effect === 'rain'
-                    ? 'bg-gradient-to-br from-sky-600/25 via-blue-500/20 to-indigo-400/15'
-                    : theme.effect === 'snow'
-                    ? 'bg-gradient-to-br from-cyan-500/25 via-blue-300/20 to-slate-200/15'
-                    : theme.effect === 'storm'
-                    ? 'bg-gradient-to-br from-violet-600/30 via-purple-500/25 to-indigo-400/20'
-                    : theme.effect === 'fog'
-                    ? 'bg-gradient-to-br from-slate-500/25 via-slate-400/20 to-slate-300/15'
-                    : theme.effect === 'stars'
-                    ? 'bg-gradient-to-br from-indigo-900/35 via-slate-800/30 to-slate-900/25'
-                    : theme.effect === 'cloud' && isNight
-                    ? 'bg-gradient-to-br from-slate-700/25 via-slate-600/20 to-slate-500/15'
-                    : theme.effect === 'cloud'
-                    ? 'bg-gradient-to-br from-slate-500/25 via-slate-400/20 to-slate-300/15'
-                    : 'bg-gradient-to-br from-slate-400/20 via-slate-300/15 to-slate-200/10';
-                
                 return (
-                  <div className={`rounded-xl border-2 ${theme.accentClass.replace('text-', 'border-')} ${gradientClass} p-4 relative overflow-hidden shadow-lg`}>
-                    {/* Dynamic weather effects */}
+                  <div className="relative overflow-hidden rounded-xl border border-border bg-muted p-4 shadow-sm">
+                    {/* Weather animations (neutral tones for dark theme) */}
                     {theme.effect === 'rain' && <RainEffect />}
                     {theme.effect === 'snow' && <SnowEffect />}
                     {theme.effect === 'sun' && <SunEffect />}
@@ -972,41 +922,40 @@ export default function HomePage() {
                     {theme.effect === 'storm' && <StormEffect />}
                     {theme.effect === 'stars' && <StarEffect />}
                     {theme.effect === 'sunset' && <SunsetEffect />}
-
                     <div className="relative z-10">
-                      <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="mb-3 flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <div className={`inline-flex items-center justify-center w-10 h-10 rounded-xl ${theme.bgClass} border-2 ${theme.accentClass.replace('text-', 'border-')} shadow-md backdrop-blur-sm`}>
-                              <WeatherGlyph kind={theme.icon} className={`w-6 h-6 ${theme.accentClass}`} />
+                          <div className="mb-2 flex items-center gap-2">
+                            <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-background">
+                              <WeatherGlyph kind={theme.icon} className="h-6 w-6 text-foreground" />
                             </div>
                             <div>
-                              <div className={`text-base font-bold ${theme.accentClass}`}>
+                              <div className="text-base font-semibold text-foreground">
                                 {theme.label}
                               </div>
-                              <div className="text-xs text-muted-foreground/80 truncate" title={weather.locationLabel}>
+                              <div className="truncate text-xs text-muted-foreground" title={weather.locationLabel}>
                                 {weather.locationLabel}
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex items-baseline gap-3 mt-3">
-                            <div className={`text-4xl font-bold tabular-nums leading-none ${theme.accentClass} drop-shadow-sm`}>
+                          <div className="mt-3 flex items-baseline gap-3">
+                            <div className="text-4xl font-semibold tabular-nums leading-none text-foreground">
                               {Math.round(weather.temperatureC)}°
                             </div>
-                            <div className="text-lg text-muted-foreground/70 font-medium">C</div>
+                            <div className="text-lg font-medium text-muted-foreground">C</div>
                           </div>
-                          
-                          <div className="flex items-center gap-3 mt-2 pt-2 border-t border-border/30">
+
+                          <div className="mt-2 flex items-center gap-3 border-t border-border pt-2">
                             <div className="flex items-center gap-1.5">
-                              <svg className="w-4 h-4 text-muted-foreground/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                               </svg>
-                              <span className="text-xs text-muted-foreground/80 font-medium">
+                              <span className="text-xs font-medium text-muted-foreground">
                                 {Math.round(weather.windKmh)} km/h
                               </span>
                             </div>
-                            <div className="text-xs text-muted-foreground/60">
+                            <div className="text-xs text-muted-foreground">
                               Updated {format(new Date(weather.fetchedAtIso), 'h:mm a')}
                             </div>
                           </div>
@@ -1015,7 +964,7 @@ export default function HomePage() {
                         <button
                           type="button"
                           onClick={refreshWeather}
-                          className={`px-3 py-1.5 text-xs rounded-lg border-2 ${theme.accentClass.replace('text-', 'border-')} ${theme.bgClass} hover:opacity-80 backdrop-blur-sm transition-all relative z-20 shadow-sm`}
+                          className="relative z-20 rounded-lg border border-border bg-background px-3 py-1.5 text-xs hover:bg-muted"
                           title="Refresh"
                         >
                           ↻
@@ -1032,24 +981,56 @@ export default function HomePage() {
         </Card>
 
         <Card title="Focus">
-          {focusTask ? (
-            <div className="space-y-2">
-              <div className="text-xs text-muted-foreground">{focusTask.label}</div>
-              <div className="text-sm font-medium">{focusTask.task.title}</div>
-              {focusTask.task.due_at ? (
-                <div className="text-xs text-muted-foreground">
-                  Due {format(new Date(focusTask.task.due_at), 'EEE, MMM d · h:mm a')}
-                </div>
-              ) : (
-                <div className="text-xs text-muted-foreground">No due date</div>
-              )}
-              <div className="text-xs text-muted-foreground">
-                Workspace: {focusTask.task.workspace === 'school' ? 'School' : 'Life'}
-              </div>
-            </div>
+          <div className="flex items-center gap-2 mb-3">
+            {(['all', 'school', 'life'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFocusFilter(f)}
+                className={`px-2 py-1 text-xs rounded border ${
+                  focusFilter === f ? 'border-foreground bg-muted' : 'border-border hover:bg-muted/50'
+                }`}
+              >
+                {f === 'all' ? 'All' : f === 'school' ? 'School' : 'Life'}
+              </button>
+            ))}
+          </div>
+          {isLoading ? (
+            <div className="text-sm text-muted-foreground">Loading...</div>
+          ) : topFocus.length > 0 ? (
+            <ul className="space-y-2">
+              {topFocus.map((t) => (
+                <li key={t.id} className="text-sm">
+                  <div className="font-medium truncate">{t.title}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {t.focusReason}
+                    {t.due_at ? ` · ${format(new Date(t.due_at), 'EEE MMM d')}` : ''}
+                  </div>
+                  {t.focusTags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-0.5">
+                      {t.focusTags.slice(0, 2).map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-block px-1.5 py-0.5 text-[10px] rounded border border-border bg-muted/50"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
           ) : (
             <div className="text-sm text-muted-foreground">
-              You're clear — no tasks due today or in the next 7 days.
+              No tasks in this view. Change filter or add tasks.
+            </div>
+          )}
+          {conflictWarnings.length > 0 && (
+            <div className="mt-3 pt-2 border-t border-border text-xs text-muted-foreground">
+              {conflictWarnings.slice(0, 2).map((w, i) => (
+                <div key={i}>⚠ {w.message}</div>
+              ))}
             </div>
           )}
         </Card>
@@ -1077,7 +1058,7 @@ export default function HomePage() {
                       <div className="text-sm font-medium truncate">{template.title}</div>
                       {rule && (
                         <div className="text-xs text-muted-foreground mt-0.5">
-                          {formatRecurrenceRule(rule)}
+                          {formatRecurrenceRule(rule, template.due_at)}
                         </div>
                       )}
                       {template.lifeCategory && (

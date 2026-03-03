@@ -13,8 +13,20 @@ function n(v: unknown): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
-export function computeWeightStats(tasks: TaskWithCourse[]) {
-  const counted = tasks.filter((t) => (t.grade?.counts ?? true) === true);
+/** Optionally exclude task IDs (e.g. from course rules like Drop Lowest). */
+export type GradeMathOptions = { excludedTaskIds?: Set<string> };
+
+function isCounted(t: TaskWithCourse, excludedTaskIds?: Set<string>): boolean {
+  if (excludedTaskIds?.has(t.id)) return false;
+  return (t.grade?.counts ?? true) === true;
+}
+
+export function computeWeightStats(
+  tasks: TaskWithCourse[],
+  options?: GradeMathOptions
+) {
+  const excluded = options?.excludedTaskIds;
+  const counted = tasks.filter((t) => isCounted(t, excluded));
 
   const weights = counted
     .map((t) => n(t.grade?.weight_percent))
@@ -34,9 +46,13 @@ export function computeWeightStats(tasks: TaskWithCourse[]) {
 }
 
 // Current Grade So Far = graded-only, normalized by graded weights
-export function computeCurrentSoFar(tasks: TaskWithCourse[]): number | null {
+export function computeCurrentSoFar(
+  tasks: TaskWithCourse[],
+  options?: GradeMathOptions
+): number | null {
+  const excluded = options?.excludedTaskIds;
   const gradedCounted = tasks.filter(
-    (t) => (t.grade?.counts ?? true) === true && (t.grade?.is_graded ?? false) === true
+    (t) => isCounted(t, excluded) && (t.grade?.is_graded ?? false) === true
   );
 
   let sumW = 0;
@@ -56,9 +72,13 @@ export function computeCurrentSoFar(tasks: TaskWithCourse[]): number | null {
 }
 
 // Projected Overall = ungraded treated as 0 contribution (so only graded contributes)
-export function computeProjectedOverall(tasks: TaskWithCourse[]): number {
+export function computeProjectedOverall(
+  tasks: TaskWithCourse[],
+  options?: GradeMathOptions
+): number {
+  const excluded = options?.excludedTaskIds;
   const gradedCounted = tasks.filter(
-    (t) => (t.grade?.counts ?? true) === true && (t.grade?.is_graded ?? false) === true
+    (t) => isCounted(t, excluded) && (t.grade?.is_graded ?? false) === true
   );
 
   let sum = 0;
@@ -72,9 +92,11 @@ export function computeProjectedOverall(tasks: TaskWithCourse[]): number {
   return sum;
 }
 
-export function computeKnownContribution(tasks: TaskWithCourse[]): number {
-  // Σ(grade% * weight%) / 100 for graded + counted items
-  return computeProjectedOverall(tasks);
+export function computeKnownContribution(
+  tasks: TaskWithCourse[],
+  options?: GradeMathOptions
+): number {
+  return computeProjectedOverall(tasks, options);
 }
 
 export function computeNeededFinal(params: {
@@ -90,11 +112,13 @@ export function computeNeededFinal(params: {
 export function buildGradeWarnings(params: {
   tasks: TaskWithCourse[];
   finalTask: TaskWithCourse | null;
+  excludedTaskIds?: Set<string>;
 }): GradeWarning[] {
   const warnings: GradeWarning[] = [];
-  const { tasks, finalTask } = params;
+  const { tasks, finalTask, excludedTaskIds } = params;
+  const options = excludedTaskIds ? { excludedTaskIds } : undefined;
 
-  const { totalCountedWeight } = computeWeightStats(tasks);
+  const { totalCountedWeight } = computeWeightStats(tasks, options);
   if (totalCountedWeight > 100.0001) {
     warnings.push({
       kind: 'total_weight_over_100',
@@ -104,7 +128,7 @@ export function buildGradeWarnings(params: {
   }
 
   for (const t of tasks) {
-    if ((t.grade?.counts ?? true) !== true) continue;
+    if (!isCounted(t, excludedTaskIds)) continue;
 
     const w = n(t.grade?.weight_percent);
     if (w === null || w <= 0) {
@@ -140,6 +164,109 @@ export function buildGradeWarnings(params: {
 
   return warnings;
 }
+
+/** Hypothetical: if I get X% on the final, what's my overall? Non-persistent. */
+export function simulateOverallIfFinal(
+  tasks: TaskWithCourse[],
+  finalTask: TaskWithCourse | null,
+  hypotheticalFinalPercent: number,
+  options?: GradeMathOptions
+): number | null {
+  if (!finalTask || !Number.isFinite(hypotheticalFinalPercent)) return null;
+  const excluded = options?.excludedTaskIds;
+  const nonFinal = tasks.filter((t) => t.id !== finalTask.id && isCounted(t, excluded));
+  let sum = 0;
+  for (const t of nonFinal) {
+    if ((t.grade?.is_graded ?? false) !== true) continue;
+    const w = n(t.grade?.weight_percent);
+    const g = n(t.grade?.grade_percent);
+    if (w === null || w <= 0 || g === null) continue;
+    sum += (g * w) / 100;
+  }
+  const wFinal = n(finalTask.grade?.weight_percent);
+  if (wFinal === null || wFinal <= 0) return null;
+  sum += (hypotheticalFinalPercent * wFinal) / 100;
+  return sum;
+}
+
+/** Hypothetical: if I score X% on all remaining (ungraded) counted items, what's my overall? */
+export function simulateOverallIfRemaining(
+  tasks: TaskWithCourse[],
+  hypotheticalRemainingPercent: number,
+  options?: GradeMathOptions
+): number | null {
+  if (!Number.isFinite(hypotheticalRemainingPercent)) return null;
+  const excluded = options?.excludedTaskIds;
+  let sum = 0;
+  for (const t of tasks) {
+    if (!isCounted(t, excluded)) continue;
+    const w = n(t.grade?.weight_percent);
+    if (w === null || w <= 0) continue;
+    const g = (t.grade?.is_graded ?? false) ? n(t.grade?.grade_percent) : hypotheticalRemainingPercent;
+    sum += ((g ?? 0) * w) / 100;
+  }
+  return sum;
+}
+
+export type GradeRisk =
+  | { kind: 'exam_pass_required'; message: string; thresholdPercent: number }
+  | { kind: 'below_exam_threshold'; message: string; currentNeeded: number }
+  | { kind: 'high_final_needed'; message: string; neededPercent: number };
+
+/** Risk detection: exam pass requirement, below threshold, etc. Non-mutating. */
+export function getGradeRisks(
+  tasks: TaskWithCourse[],
+  finalTask: TaskWithCourse | null,
+  options?: GradeMathOptions
+): GradeRisk[] {
+  const risks: GradeRisk[] = [];
+  if (!finalTask) return risks;
+  const wFinal = n(finalTask.grade?.weight_percent);
+  if (wFinal === null || wFinal <= 0) return risks;
+  const known = computeKnownContribution(
+    tasks.filter((t) => t.id !== finalTask.id),
+    options
+  );
+  const neededFor90 = computeNeededFinal({
+    target: 90,
+    knownContribution: known,
+    finalWeightPercent: wFinal,
+  });
+  if (neededFor90 !== null && neededFor90 > 50) {
+    risks.push({
+      kind: 'exam_pass_required',
+      message: `Course may require ≥50% on final to pass.`,
+      thresholdPercent: 50,
+    });
+  }
+  const neededFor50 = computeNeededFinal({
+    target: 50,
+    knownContribution: known,
+    finalWeightPercent: wFinal,
+  });
+  if (neededFor50 !== null && neededFor50 > 100) {
+    risks.push({
+      kind: 'below_exam_threshold',
+      message: `You are below the exam-pass threshold: need ${neededFor50.toFixed(0)}% on final to reach 50% overall.`,
+      currentNeeded: neededFor50,
+    });
+  }
+  return risks;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

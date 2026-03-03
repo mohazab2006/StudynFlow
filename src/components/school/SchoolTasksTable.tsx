@@ -87,7 +87,7 @@ export default function SchoolTasksTable({ tasks }: Props) {
                     {t.course.code}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">—</span>
+                  <span className="text-muted-foreground text-xs" title="Unassigned School Tasks inbox">Unassigned</span>
                 )}
               </div>
 

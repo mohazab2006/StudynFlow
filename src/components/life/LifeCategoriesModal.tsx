@@ -148,3 +148,19 @@ export default function LifeCategoriesModal({ isOpen, onClose }: Props) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

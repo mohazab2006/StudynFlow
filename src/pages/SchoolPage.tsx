@@ -9,14 +9,21 @@ import ColorPicker from '../components/ui/ColorPicker';
 import SchoolTasksTable from '../components/school/SchoolTasksTable';
 import type { CreateCourseInput, Course, TaskWithCourse } from '../lib/types';
 import TaskTypesModal from '../components/school/TaskTypesModal';
+import { useCourseAssets, useDeleteCourseAsset } from '../hooks/useCourseAssets';
 import {
   buildGradeWarnings,
   computeCurrentSoFar,
   computeNeededFinal,
   computeProjectedOverall,
   computeWeightStats,
+  simulateOverallIfFinal,
+  getGradeRisks,
 } from '../services/gradeMath';
 import { useUpsertTaskGrade } from '../hooks/useGrades';
+import { useCourseRules, useUpdateCourseRule, useCreateCourseRule } from '../hooks/useCourseRules';
+import { getExcludedTaskIdsByRules, getExclusionReason } from '../services/courseRules';
+import { useCourseProfile, useUpsertCourseProfile } from '../hooks/useCourseProfile';
+import { extractProfileFromText } from '../services/courseProfileExtract';
 
 export default function SchoolPage() {
   const [isCreatingTask, setIsCreatingTask] = useState(false);
@@ -31,6 +38,7 @@ export default function SchoolPage() {
   >('all');
   const [minWeightFilter, setMinWeightFilter] = useState<string>(''); // % (optional)
   const [gradebookSort, setGradebookSort] = useState<'due' | 'weight' | 'type'>('due');
+  const [whatIfFinalPercent, setWhatIfFinalPercent] = useState<string>('');
   
   const { data: allTasks = [], isLoading: tasksLoading } = useTasks({
     // IMPORTANT: completion status must never affect grade calculations.
@@ -44,6 +52,15 @@ export default function SchoolPage() {
   const updateCourse = useUpdateCourse();
   const deleteCourse = useDeleteCourse();
   const upsertGrade = useUpsertTaskGrade();
+  const { data: courseAssets = [] } = useCourseAssets(selectedCourseId);
+  const { data: unassignedAssets = [] } = useCourseAssets(null);
+  const deleteCourseAsset = useDeleteCourseAsset();
+  const { data: courseRules = [] } = useCourseRules(selectedCourseId);
+  const updateCourseRule = useUpdateCourseRule(selectedCourseId);
+  const createCourseRule = useCreateCourseRule(selectedCourseId);
+  const { data: courseProfile } = useCourseProfile(selectedCourseId);
+  const upsertCourseProfile = useUpsertCourseProfile(selectedCourseId);
+  const [profilePaste, setProfilePaste] = useState('');
 
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } = useForm<CreateCourseInput>({
     resolver: zodResolver(courseSchema),
@@ -147,27 +164,48 @@ export default function SchoolPage() {
     return finals[0] ?? null;
   }, [courseTasksAll, selectedCourseId]);
 
-  const gradeStats = useMemo(() => (selectedCourseId ? computeWeightStats(courseTasksAll) : null), [courseTasksAll, selectedCourseId]);
-  const currentSoFar = useMemo(() => (selectedCourseId ? computeCurrentSoFar(courseTasksAll) : null), [courseTasksAll, selectedCourseId]);
-  const projectedOverall = useMemo(() => (selectedCourseId ? computeProjectedOverall(courseTasksAll) : 0), [courseTasksAll, selectedCourseId]);
+  const excludedByRules = useMemo(
+    () => (selectedCourseId && courseRules.length > 0 ? getExcludedTaskIdsByRules(courseTasksAll, courseRules) : new Set<string>()),
+    [courseTasksAll, courseRules, selectedCourseId]
+  );
+  const gradeMathOptions = useMemo(
+    () => (excludedByRules.size > 0 ? { excludedTaskIds: excludedByRules } : undefined),
+    [excludedByRules]
+  );
+
+  const gradeStats = useMemo(
+    () => (selectedCourseId ? computeWeightStats(courseTasksAll, gradeMathOptions) : null),
+    [courseTasksAll, selectedCourseId, gradeMathOptions]
+  );
+  const currentSoFar = useMemo(
+    () => (selectedCourseId ? computeCurrentSoFar(courseTasksAll, gradeMathOptions) : null),
+    [courseTasksAll, selectedCourseId, gradeMathOptions]
+  );
+  const projectedOverall = useMemo(
+    () => (selectedCourseId ? computeProjectedOverall(courseTasksAll, gradeMathOptions) : 0),
+    [courseTasksAll, selectedCourseId, gradeMathOptions]
+  );
 
   const neededOnFinal = useMemo(() => {
     if (!selectedCourseId || !selectedCourse || !finalTask) return null;
     const wFinal = finalTask.grade?.weight_percent ?? null;
     if (wFinal === null || Number(wFinal) <= 0) return null;
-    // Exclude the final itself from known contribution
     const nonFinal = courseTasksAll.filter((t) => t.id !== finalTask.id);
-    const known = computeProjectedOverall(nonFinal); // already /100
+    const known = computeProjectedOverall(nonFinal, gradeMathOptions);
     return computeNeededFinal({
       target: selectedCourse.target_grade_default ?? 90,
       knownContribution: known,
       finalWeightPercent: Number(wFinal),
     });
-  }, [selectedCourseId, selectedCourse, finalTask, courseTasksAll]);
+  }, [selectedCourseId, selectedCourse, finalTask, courseTasksAll, gradeMathOptions]);
 
   const warnings = useMemo(() => {
     if (!selectedCourseId) return [];
-    const baseWarnings = buildGradeWarnings({ tasks: courseTasksAll, finalTask });
+    const baseWarnings = buildGradeWarnings({
+      tasks: courseTasksAll,
+      finalTask,
+      excludedTaskIds: excludedByRules.size > 0 ? excludedByRules : undefined,
+    });
     // Add warning if any items are excluded
     const excludedCount = courseTasksAll.filter((t) => (t.grade?.counts ?? true) === false).length;
     if (excludedCount > 0) {
@@ -179,6 +217,11 @@ export default function SchoolPage() {
     }
     return baseWarnings;
   }, [courseTasksAll, finalTask, selectedCourseId]);
+
+  const gradeRisks = useMemo(
+    () => (selectedCourseId ? getGradeRisks(courseTasksAll, finalTask, gradeMathOptions) : []),
+    [courseTasksAll, finalTask, gradeMathOptions, selectedCourseId]
+  );
 
   const gradebookTasks = useMemo(() => {
     if (!selectedCourseId) return [];
@@ -437,24 +480,187 @@ export default function SchoolPage() {
             </div>
           </div>
 
+          {/* What-if & Risk */}
+          {selectedCourse && finalTask && (
+            <div className="mt-3 rounded-lg border border-border bg-muted/20 p-4">
+              <div className="text-sm font-semibold mb-2">Strategy (hypothetical)</div>
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <span className="text-xs text-muted-foreground">If I get</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={whatIfFinalPercent}
+                  onChange={(e) => setWhatIfFinalPercent(e.target.value)}
+                  placeholder="75"
+                  className="w-14 px-2 py-1 text-sm border border-border rounded bg-background"
+                />
+                <span className="text-xs text-muted-foreground">% on the final → overall</span>
+                {whatIfFinalPercent.trim() !== '' && (() => {
+                  const val = parseFloat(whatIfFinalPercent);
+                  const sim = Number.isFinite(val)
+                    ? simulateOverallIfFinal(courseTasksAll, finalTask, val, gradeMathOptions)
+                    : null;
+                  return sim !== null ? (
+                    <span className="text-sm font-medium tabular-nums">{sim.toFixed(1)}%</span>
+                  ) : null;
+                })()}
+              </div>
+              {gradeRisks.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-border">
+                  <div className="text-xs font-medium text-muted-foreground mb-1">Risks</div>
+                  <ul className="text-xs text-muted-foreground space-y-0.5">
+                    {gradeRisks.map((r, i) => (
+                      <li key={i}>• {r.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Course Overview (profile from extraction or paste) */}
+          <div className="mt-3 rounded-lg border border-border bg-muted/20 p-4">
+            <div className="text-sm font-semibold mb-2">Course Overview</div>
+            {courseProfile && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm mb-3">
+                {courseProfile.professor_name && (
+                  <div><span className="text-muted-foreground">Professor:</span> {courseProfile.professor_name}</div>
+                )}
+                {courseProfile.professor_email && (
+                  <div><span className="text-muted-foreground">Email:</span> {courseProfile.professor_email}</div>
+                )}
+                {courseProfile.office_hours && (
+                  <div><span className="text-muted-foreground">Office hours:</span> {courseProfile.office_hours}</div>
+                )}
+                {courseProfile.textbook_requirements && (
+                  <div><span className="text-muted-foreground">Textbook:</span> {courseProfile.textbook_requirements}</div>
+                )}
+                {courseProfile.technical_requirements && (
+                  <div><span className="text-muted-foreground">Technical:</span> {courseProfile.technical_requirements}</div>
+                )}
+                {courseProfile.exam_pass_requirement && (
+                  <div><span className="text-muted-foreground">Exam pass:</span> {courseProfile.exam_pass_requirement}</div>
+                )}
+              </div>
+            )}
+            <details className="text-sm">
+              <summary className="cursor-pointer text-muted-foreground">Extract profile from pasted syllabus text</summary>
+              <textarea
+                value={profilePaste}
+                onChange={(e) => setProfilePaste(e.target.value)}
+                placeholder="Paste syllabus or outline text..."
+                className="mt-2 w-full h-24 px-2 py-1 border border-border rounded bg-background text-sm resize-y"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!selectedCourseId || !profilePaste.trim()) return;
+                  const extracted = extractProfileFromText(profilePaste);
+                  await upsertCourseProfile.mutateAsync({ course_id: selectedCourseId, ...extracted });
+                  setProfilePaste('');
+                }}
+                disabled={!selectedCourseId || !profilePaste.trim()}
+                className="mt-2 px-2 py-1 text-xs rounded border border-border hover:bg-muted disabled:opacity-50"
+              >
+                Extract & save
+              </button>
+            </details>
+          </div>
+
           {warnings.length > 0 ? (
-            <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
-              <div className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2 flex items-center gap-2">
+            <div className="mt-3 rounded-lg border border-border bg-muted p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
                 <span>⚠</span>
                 <span>Warnings</span>
               </div>
               <div className="space-y-2">
                 {warnings.slice(0, 6).map((w, idx) => (
-                  <div key={idx} className="text-sm text-amber-700 dark:text-amber-300">
+                  <div key={idx} className="text-sm text-muted-foreground">
                     • {w.message}
                   </div>
                 ))}
                 {warnings.length > 6 ? (
-                  <div className="text-xs text-amber-600 dark:text-amber-400">+ {warnings.length - 6} more…</div>
+                  <div className="text-xs text-muted-foreground">+ {warnings.length - 6} more…</div>
                 ) : null}
               </div>
             </div>
           ) : null}
+
+          {/* Course rules (drop lowest, etc.) */}
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 p-4">
+            <div className="text-sm font-semibold mb-2">Course rules</div>
+            <p className="text-xs text-muted-foreground mb-3">
+              When enabled, rules apply during grade calculation. Excluded tasks are not deleted; manual &quot;Include&quot; still overrides.
+            </p>
+            {courseRules.length === 0 ? (
+              <div className="text-sm text-muted-foreground">
+                No rules. Add one (e.g. Drop lowest 1 of 5 quizzes) to apply during grading.
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {courseRules.map((r) => (
+                  <li key={r.id} className="flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={r.enabled}
+                      onChange={() => updateCourseRule.mutate({ id: r.id, patch: { enabled: !r.enabled } })}
+                      className="rounded border-border"
+                    />
+                    <span>
+                      {r.type === 'DROP_LOWEST' ? `Drop lowest: best ${r.keep} of ${r.total} ${r.target}s` : r.type}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-3 flex gap-2">
+              <select
+                id="rule-type"
+                className="px-2 py-1 text-sm border border-border rounded bg-background"
+                defaultValue="Quiz"
+              >
+                {['Quiz', 'Lab', 'Assignment', 'Tutorial', 'Reading', 'Exam', 'Midterm'].map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              <label htmlFor="rule-keep" className="sr-only">Keep</label>
+              <input
+                id="rule-keep"
+                type="number"
+                min={1}
+                placeholder="Keep"
+                className="w-14 px-2 py-1 text-sm border border-border rounded bg-background"
+              />
+              <span className="text-sm self-center">of</span>
+              <label htmlFor="rule-total" className="sr-only">Total</label>
+              <input
+                id="rule-total"
+                type="number"
+                min={1}
+                placeholder="Total"
+                className="w-14 px-2 py-1 text-sm border border-border rounded bg-background"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const typeEl = document.getElementById('rule-type') as HTMLSelectElement;
+                  const keepEl = document.getElementById('rule-keep') as HTMLInputElement;
+                  const totalEl = document.getElementById('rule-total') as HTMLInputElement;
+                  const keep = parseInt(keepEl?.value || '1', 10);
+                  const total = parseInt(totalEl?.value || '1', 10);
+                  if (typeEl && Number.isFinite(keep) && Number.isFinite(total) && keep <= total && selectedCourseId) {
+                    createCourseRule.mutate({ type: 'DROP_LOWEST', target: typeEl.value, keep, total });
+                    if (keepEl) keepEl.value = '';
+                    if (totalEl) totalEl.value = '';
+                  }
+                }}
+                className="px-2 py-1 text-sm border border-border rounded hover:bg-muted"
+              >
+                Add rule
+              </button>
+            </div>
+          </div>
 
           {/* Gradebook */}
           <div className="mt-6">
@@ -490,8 +696,16 @@ export default function SchoolPage() {
                   const isGraded = t.grade?.is_graded ?? false;
                   const w = t.grade?.weight_percent ?? null;
                   const g = t.grade?.grade_percent ?? null;
+                  const excludedByRule = excludedByRules.has(t.id);
+                  const exclusionReason = excludedByRule ? getExclusionReason(t.id, courseTasksAll, courseRules) : null;
                   const contribution =
-                    counts && isGraded && w !== null && Number(w) > 0 && g !== null && g !== undefined
+                    !excludedByRule &&
+                    counts &&
+                    isGraded &&
+                    w !== null &&
+                    Number(w) > 0 &&
+                    g !== null &&
+                    g !== undefined
                       ? (Number(g) * Number(w)) / 100
                       : null;
 
@@ -521,12 +735,17 @@ export default function SchoolPage() {
                     <div
                       key={t.id}
                       className={`grid grid-cols-[1.4fr_120px_160px_110px_110px_130px_170px_80px] text-sm ${
-                        counts ? 'hover:bg-muted/60' : 'bg-muted/10'
+                        counts && !excludedByRule ? 'hover:bg-muted/60' : 'bg-muted/10'
                       }`}
-                      title={!counts ? 'Excluded from grading' : undefined}
+                      title={exclusionReason ?? (!counts ? 'Excluded from grading' : undefined)}
                     >
-                      <div className="px-3 py-2 border-r border-border truncate" title={t.title}>
-                        {t.title}
+                      <div className="px-3 py-2 border-r border-border min-w-0">
+                        <div className="truncate" title={t.title}>{t.title}</div>
+                        {exclusionReason ? (
+                          <div className="text-xs text-muted-foreground truncate" title={exclusionReason}>
+                            {exclusionReason}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="px-3 py-2 border-r border-border text-muted-foreground truncate">
                         {t.type || '—'}
@@ -544,7 +763,11 @@ export default function SchoolPage() {
                         {contribution === null ? '—' : `${contribution.toFixed(2)}%`}
                       </div>
                       <div className="px-3 py-2 border-r border-border text-muted-foreground text-xs">
-                        {!counts ? (
+                        {excludedByRule ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded border border-border bg-muted" title={exclusionReason ?? ''}>
+                            Excluded by rule
+                          </span>
+                        ) : !counts ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded border border-border bg-muted">
                             Excluded
                           </span>
@@ -587,19 +810,40 @@ export default function SchoolPage() {
             <div className="text-xs text-muted-foreground mt-2">
               Note: task completion (todo/doing/done) never affects grade calculations.
             </div>
+
+            {courseAssets.length > 0 && (
+              <div className="mt-6">
+                <div className="text-sm font-medium text-muted-foreground mb-2">Course assets (imported files)</div>
+                <ul className="space-y-1 text-sm">
+                  {courseAssets.map((a) => (
+                    <li key={a.id} className="flex items-center justify-between gap-2 py-1">
+                      <span className="truncate text-foreground" title={a.file_name}>{a.file_name}</span>
+                      <button
+                        type="button"
+                        onClick={() => { if (confirm('Remove this asset?')) deleteCourseAsset.mutate(a.id); }}
+                        className="text-muted-foreground hover:text-red-500 shrink-0"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </div>
       ) : null}
 
       {/* Tasks Section */}
       <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-semibold">
-            {selectedCourseId
-              ? `Tasks - ${courses.find((c) => c.id === selectedCourseId)?.code ?? 'Course'}`
-              : 'All School Tasks'}
-          </h2>
-          <div className="flex items-center gap-3">
+        <div className="mb-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-semibold">
+              {selectedCourseId
+                ? `Tasks - ${courses.find((c) => c.id === selectedCourseId)?.code ?? 'Course'}`
+                : 'All School Tasks'}
+            </h2>
+            <div className="flex items-center gap-3">
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
@@ -683,6 +927,26 @@ export default function SchoolPage() {
               Types
             </button>
           </div>
+          </div>
+          {!selectedCourseId && unassignedAssets.length > 0 && (
+            <div className="mt-3 rounded-lg border border-border bg-muted/20 p-3">
+              <div className="text-sm font-medium text-muted-foreground mb-2">Unassigned assets (imported files)</div>
+              <ul className="space-y-1 text-sm">
+                {unassignedAssets.map((a) => (
+                  <li key={a.id} className="flex items-center justify-between gap-2 py-1">
+                    <span className="truncate text-foreground" title={a.file_name}>{a.file_name}</span>
+                    <button
+                      type="button"
+                      onClick={() => { if (confirm('Remove this asset?')) deleteCourseAsset.mutate(a.id); }}
+                      className="text-muted-foreground hover:text-red-500 shrink-0"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
         <SchoolTasksTable tasks={schoolTasks} />
       </div>

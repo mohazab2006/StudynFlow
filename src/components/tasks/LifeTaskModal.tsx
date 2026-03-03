@@ -100,10 +100,27 @@ export default function LifeTaskModal({ task, isOpen, onClose }: LifeTaskModalPr
     setCategoryDropdownOpen(false);
     setNewCategoryName('');
     if (task) {
+      // datetime-local needs YYYY-MM-DDTHH:mm in local time
+      let dueAtForm = task.due_at || '';
+      if (task.due_at) {
+        try {
+          const d = new Date(task.due_at);
+          if (!Number.isNaN(d.getTime())) {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const h = String(d.getHours()).padStart(2, '0');
+            const min = String(d.getMinutes()).padStart(2, '0');
+            dueAtForm = `${y}-${m}-${day}T${h}:${min}`;
+          }
+        } catch {
+          // keep task.due_at as-is
+        }
+      }
       reset({
         title: task.title,
         description: task.description || '',
-        due_at: task.due_at || '',
+        due_at: dueAtForm,
         life_category_id: (task as any).life_category_id || '',
         life_category_name: task.lifeCategory?.name || '',
       });
@@ -160,6 +177,34 @@ export default function LifeTaskModal({ task, isOpen, onClose }: LifeTaskModalPr
           await handleEditSubmit(data, 'instance');
         } else if (editMode === 'series') {
           await handleEditSubmit(data, 'series');
+        } else if (task.isRecurringTemplate) {
+          // Editing a recurring template: update title, description, due, category, and recurrence rule
+          let timeOfDay: string | undefined;
+          if (data.due_at) {
+            const date = new Date(data.due_at);
+            timeOfDay = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+          }
+          const rule: RecurrenceRule = {
+            frequency: recurrenceRule.frequency || 'DAILY',
+            interval: recurrenceRule.interval || 1,
+            byWeekday: recurrenceRule.frequency === 'WEEKLY' ? selectedWeekdays : undefined,
+            timeOfDay: timeOfDay,
+            endType: recurrenceRule.endType || 'NEVER',
+            untilDate: recurrenceRule.endType === 'UNTIL' ? recurrenceRule.untilDate : undefined,
+            count: recurrenceRule.endType === 'COUNT' ? recurrenceRule.count : undefined,
+          };
+          if (rule.endType !== 'COUNT') rule.count = undefined;
+
+          await updateTask.mutateAsync({
+            id: task.id,
+            title: data.title,
+            description: data.description || null,
+            due_at: data.due_at || null,
+            life_category_id: data.life_category_id || null,
+            recurrenceRuleJson: JSON.stringify(rule),
+          });
+          await ensureRecurringInstances(90);
+          onClose();
         } else {
           // Normal edit (not a recurring instance)
           await updateTask.mutateAsync({
@@ -463,37 +508,40 @@ export default function LifeTaskModal({ task, isOpen, onClose }: LifeTaskModalPr
               />
             </div>
 
-            {!isEditing && (
+            {/* Recurring: when creating, always show toggle; when editing a template, show schedule. Schedule fields when (creating and toggled) or editing template. */}
+            {(!isEditing || task?.isRecurringTemplate) && (
               <div className="border-t border-border pt-4">
-                <div className="flex items-center gap-3 mb-4">
-                  <button
-                    type="button"
-                    onClick={() => setIsRecurring(!isRecurring)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
-                      isRecurring
-                        ? 'bg-primary/20 border-primary text-primary font-semibold'
-                        : 'bg-muted border-border hover:border-primary/50 hover:bg-muted/80'
-                    }`}
-                  >
-                    <svg
-                      className={`w-5 h-5 ${isRecurring ? 'text-primary' : 'text-muted-foreground'}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                {!isEditing && (
+                  <div className="flex items-center gap-3 mb-4">
+                    <button
+                      type="button"
+                      onClick={() => setIsRecurring(!isRecurring)}
+                      className={`flex items-center gap-2 rounded-lg border px-4 py-2.5 transition-colors ${
+                        isRecurring
+                          ? 'border-foreground bg-muted text-foreground font-semibold'
+                          : 'border-border bg-muted hover:bg-muted/80'
+                      }`}
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                      />
-                    </svg>
-                    <span className="text-base font-medium">Recurring</span>
-                  </button>
-                </div>
+                      <svg
+                        className={`w-5 h-5 ${isRecurring ? 'text-foreground' : 'text-muted-foreground'}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                        />
+                      </svg>
+                      <span className="text-base font-medium">Recurring</span>
+                    </button>
+                  </div>
+                )}
 
-                {isRecurring && (
-                  <div className="space-y-4 pl-6">
+                {(isRecurring || task?.isRecurringTemplate) && (
+                <div className="space-y-4 pl-6">
                     <div>
                       <label className="block text-sm font-medium mb-1">Start Date & Time</label>
                       <input

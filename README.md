@@ -1,4 +1,4 @@
-# MyTodo
+# StudynFlow
 
 A modern desktop todo app that actually makes task management enjoyable. Built with Tauri 2, React, and TypeScript—because who says productivity tools have to be boring?
 

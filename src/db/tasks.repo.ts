@@ -277,12 +277,12 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       input.type || 'Other',
       input.course_id || null,
       input.life_category_id || null,
-      (input as any).workspace || (input.course_id ? 'school' : 'life'),
+      input.workspace ?? (input.course_id ? 'school' : 'life'),
       input.status || 'todo',
       input.priority_manual || null,
       input.effort_estimate_minutes || null,
       input.tags || null,
-      'manual',
+      input.source ?? 'manual',
       input.isRecurringTemplate ? 1 : 0,
       input.recurrenceRuleJson || null,
       seriesId,
@@ -425,6 +425,7 @@ export async function getRecurringTemplates(): Promise<TaskWithCourse[]> {
       t.recurringSeriesId as task_recurringSeriesId,
       t.created_at as task_created_at,
       t.updated_at as task_updated_at,
+      t.deleted_at as task_deleted_at,
       t.isRecurringTemplate as task_isRecurringTemplate,
       
       lc.id as life_category_id,
@@ -435,9 +436,9 @@ export async function getRecurringTemplates(): Promise<TaskWithCourse[]> {
       lc.deleted_at as life_category_deleted_at
     FROM tasks t
     LEFT JOIN life_categories lc ON t.life_category_id = lc.id AND lc.deleted_at IS NULL
-    WHERE t.deleted_at IS NULL
-      AND t.isRecurringTemplate = 1
+    WHERE t.isRecurringTemplate = 1
       AND t.workspace = 'life'
+      AND t.deleted_at IS NULL
     ORDER BY t.title ASC
   `);
 
@@ -458,7 +459,7 @@ export async function getRecurringTemplates(): Promise<TaskWithCourse[]> {
       source: 'manual',
       created_at: row.task_created_at,
       updated_at: row.task_updated_at,
-      deleted_at: null,
+      deleted_at: row.task_deleted_at,
       isRecurringTemplate: Boolean(row.task_isRecurringTemplate),
       recurrenceRuleJson: row.task_recurrenceRuleJson || null,
       recurringSeriesId: row.task_recurringSeriesId || null,
@@ -486,7 +487,6 @@ export async function getRecurringTemplates(): Promise<TaskWithCourse[]> {
  * Delete a recurring instance and all future instances in the same series
  */
 export async function deleteRecurringInstanceAndFuture(instanceId: string): Promise<void> {
-  const db = await getDatabase();
   const now = new Date().toISOString();
   
   // Get the instance to find its occurrence date and series
